@@ -1,0 +1,144 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vollam Developer</title>
+    <style>
+        
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+        .sky {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(to bottom, #0a0a20, #000000);
+        }
+        .moon {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background-color: #fce883;
+            border-radius: 50%;
+            box-shadow: 0 0 30px #fce883, 0 0 60px #fce883;
+            top: 15%;
+            left: 20%;
+            animation: moonRise 15s infinite alternate;
+        }
+        
+        @keyframes moonRise {
+            from {
+                transform: translateY(0);
+            }
+            to {
+                transform: translateY(-20px);
+            }
+        }
+        .star {
+            position: absolute;
+            background-color: white;
+            border-radius: 50%;
+            opacity: 0;
+            animation: twinkle 1.5s infinite alternate;
+        }
+        
+        @keyframes twinkle {
+            from {
+                opacity: 0.5;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+      	.center-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #ffffff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            z-index: 10;
+        }
+
+        .center-content h1 {
+            margin: 0;
+            font-size: 42px;
+            letter-spacing: 4px;
+            text-shadow: 0 0 15px rgba(255,255,255,0.6);
+        }
+
+        .center-content a {
+            display: inline-block;
+            margin-top: 15px;
+            font-size: 18px;
+            color: #d1d1d1;
+            text-decoration: none;
+            padding: 8px 18px;
+            border: 1px solid #d1d1d1;
+            border-radius: 25px;
+            transition: all 0.3s ease;
+        }
+
+        .center-content a:hover {
+            background-color: #999999;
+            color: #000;
+            box-shadow: 0 0 15px #999999;
+        }
+    </style>
+</head>
+<body>
+    <div class="sky">
+        <div class="moon"></div>
+        <div class="stars-container"></div>
+    </div>
+  	<div class="center-content">
+        <h1>VOLLAM DEVELOPER</h1>
+        <a href="https://www.facebook.com/vollams" target="_blank">
+            Facebook
+        </a>
+		<a href="https://wa.me/+966598126771" target="_blank">
+            WhatsApp
+        </a>
+    </div>
+    <script>
+        /* JavaScript Goes Here */
+        const starsContainer = document.querySelector('.stars-container');
+        const numberOfStars = 200; // يمكنك تيير دد النجوم
+        for (let i = 0; i < numberOfStars; i++) {
+            const star = document.createElement('div');
+            star.classList.add('star');
+            starsContainer.appendChild(star);
+            // تحديد موقع شوائي للنجوم
+            star.style.left = `${Math.random() * 100}%`;
+            star.style.top = `${Math.random() * 100}%`;
+            // تحدد حجم عشوائي للنجوم
+            const size = Math.random() * 3 + 1; // من 1px إلى 4px
+            star.style.width = `${size}px`;
+            star.style.height = `${size}px`;
+            // تأخير شوائي لوميض لجعها تبدو طبيعية
+            star.style.animationDelay = `${Math.random() * 2}s`;
+            star.style.animationDuration = `${Math.random() * 1.5 + 1}s`;
+        }
+    </script>
+  
+  	<audio id="bgMusic" autoplay muted loop preload="auto">
+        <source src="../meetyourself.mp3" type="audio/mpeg">
+    </audio>
+
+    <script>
+    document.addEventListener("click", function () {
+        const music = document.getElementById("bgMusic");
+        music.muted = false;
+        music.play();
+    }, { once: true });
+    </script>
+  	
+  	<script disable-devtool-auto src='https://cdn.jsdelivr.net/npm/disable-devtool'></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"9ee490396bff42258c8113e6d571f02a","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9eb34625fcc37d33',t:'MTc3NjAwNzg0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
+
