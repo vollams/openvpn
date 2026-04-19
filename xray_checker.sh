@@ -1,104 +1,106 @@
 #!/bin/bash
-## Xray API + MySQL online/offline updater
+## Xray online/offline updater
+## Supports two modes:
+##   1) Per-user email stats (debian_xray/vless — unique UUID per user)
+##   2) Access log IP matching (AIO — shared UUID, user IP set by auth.php)
 
-# Xray API Config
 _APISERVER="127.0.0.1:62789"
-
-# Try to automatically locate Xray binary
 _XRAY=$(command -v xray || true)
-if [[ -z "$_XRAY" ]]; then
-    echo "Error: Xray binary not found. Please install Xray or specify its path."
-    exit 1
-fi
+if [[ -z "$_XRAY" ]]; then exit 1; fi
 
 datenow=$(date +"%Y-%m-%d %T")
 server_ip=SERVER_IP
 
-# Load MySQL credentials: DB_HOST / DB_USER / DB_PASS / DB_NAME
-. /etc/xray/.db-base
+# Load credentials from either location
+if [[ -f /etc/xray/.db-base ]]; then
+    . /etc/xray/.db-base
+elif [[ -f /etc/.db-base ]]; then
+    . /etc/.db-base
+else
+    exit 1
+fi
+DB_HOST="${HOST:-localhost}"
+DB_USER="${USER}"
+DB_PASS="${PASS}"
+DB_NAME="${DBNAME:-$DB}"
+
+XRAY_ACCESS_LOG="/var/log/xray/access.log"
 
 # ======================================================
-# 1) Fetch XRAY stats
+# MODE 1: Try per-user stats from API (per-user UUID setup)
 # ======================================================
 DATA="$($_XRAY api statsquery --server=$_APISERVER 2>/dev/null)"
 
-# ======================================================
-# 2) Extract ONLY Xray usernames
-# ======================================================
 ONLINE_USERS=($(
     echo "$DATA" \
     | grep '"name": "user' \
     | sed -E 's/.*user>>>([^>]+)>>>.*/\1/' \
+    | sed 's/@vless$//' \
+    | grep -v '^shared$' \
     | sort -u
 ))
 
-echo "== Parsed Online Users =="
-printf "%s\n" "${ONLINE_USERS[@]}"
-echo "========================="
+if [[ ${#ONLINE_USERS[@]} -gt 0 ]]; then
+    # Per-user UUID mode: use API stats
+    ACTIVE_LIST=$(printf "'%s'," "${ONLINE_USERS[@]}")
+    ACTIVE_LIST="${ACTIVE_LIST%,}"
 
-# ======================================================
-# 3) If NONE online → mark all XRAY users offline
-# ======================================================
-if [[ ${#ONLINE_USERS[@]} -eq 0 ]]; then
-    echo "[INFO] No users online. Setting all Xray users offline."
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE users SET is_connected=1, is_connected_xray=1, active_address='$server_ip', active_date='$datenow' WHERE user_name IN ($ACTIVE_LIST);" 2>/dev/null
 
-    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
-UPDATE users
-SET
-    is_connected = 0,
-    is_connected_xray = 0,
-    active_address = '',
-    active_date = ''
-WHERE is_connected_xray = 1
-  AND active_address = '$server_ip';
-EOF
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE users SET is_connected=0, is_connected_xray=0, active_address='', active_date='' WHERE active_address='$server_ip' AND user_name NOT IN ($ACTIVE_LIST);" 2>/dev/null
 
-    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
-UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';
-EOF
-
+    ONLINE_COUNT=${#ONLINE_USERS[@]}
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE server_list SET online='$ONLINE_COUNT', last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
     exit 0
 fi
 
 # ======================================================
-# 4) Convert usernames → SQL list: ('u1','u2','u3')
+# MODE 2: Shared UUID — use access log IP matching
+# active_address is set by auth.php when user logs in via app
 # ======================================================
-ACTIVE_LIST=$(printf "'%s'," "${ONLINE_USERS[@]}")
-ACTIVE_LIST="${ACTIVE_LIST%,}"  # remove last comma
+if [[ ! -f "$XRAY_ACCESS_LOG" ]]; then
+    # No API users, no access log — mark all offline
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address='$server_ip';" 2>/dev/null
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
+    exit 0
+fi
 
-echo "[INFO] SQL Active List: $ACTIVE_LIST"
+# Get IPs from accepted connections in recent access log lines
+# Use tail of last 500 lines — avoids broken awk timestamp comparison
+ACTIVE_IPS=($(tail -500 "$XRAY_ACCESS_LOG" 2>/dev/null \
+    | grep ' accepted ' \
+    | grep -oP 'from \K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
+    | grep -v '^127\.' \
+    | sort -u))
 
-# ======================================================
-# 5) Set detected users as ONLINE
-# ======================================================
-mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
-UPDATE users
-SET
-    is_connected = 1,
-    is_connected_xray = 1,
-    active_address = '$server_ip',
-    active_date = '$datenow'
-WHERE user_name IN ($ACTIVE_LIST);
-EOF
+if [[ ${#ACTIVE_IPS[@]} -eq 0 ]]; then
+    # No recent connections
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address='$server_ip';" 2>/dev/null
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
+    exit 0
+fi
 
-# ======================================================
-# 6) All other server users → OFFLINE
-# ======================================================
-mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
-UPDATE users
-SET
-    is_connected = 0,
-    is_connected_xray = 0,
-    active_address = '',
-    active_date = ''
-WHERE active_address = '$server_ip'
-  AND user_name NOT IN ($ACTIVE_LIST);
-EOF
+# Build IP list for SQL
+IP_LIST=$(printf "'%s'," "${ACTIVE_IPS[@]}")
+IP_LIST="${IP_LIST%,}"
 
-# ======================================================
-# 7) Update server_list.online count for this server
-# ======================================================
-ONLINE_COUNT=${#ONLINE_USERS[@]}
-mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
-UPDATE server_list SET online='$ONLINE_COUNT', last_update=NOW() WHERE server_ip='$server_ip';
-EOF
+# Mark users whose active_address matches an active IP as online
+mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE users SET is_connected=1, is_connected_xray=1, active_date='$datenow' WHERE active_address IN ($IP_LIST);" 2>/dev/null
+
+# Mark users on this server with IPs no longer active as offline
+mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address NOT IN ($IP_LIST) AND active_address NOT IN ('', '$server_ip');" 2>/dev/null
+
+# Count online users for this server (by matching their active_address IPs to xray port connections)
+ONLINE_COUNT=$(mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+    -sN -e "SELECT COUNT(*) FROM users WHERE is_connected_xray=1 AND active_address IN ($IP_LIST);" 2>/dev/null || echo 0)
+mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+"UPDATE server_list SET online='$ONLINE_COUNT', last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null

@@ -15,7 +15,11 @@ datenow=$(date +"%Y-%m-%d %T")
 server_ip=SERVER_IP
 
 # MySQL Config
-. /etc/xray/.db-base
+if [[ -f /etc/xray/.db-base ]]; then . /etc/xray/.db-base; elif [[ -f /etc/.db-base ]]; then . /etc/.db-base; fi
+DB_HOST="${HOST:-localhost}"
+DB_USER="${USER}"
+DB_PASS="${PASS}"
+DB_NAME="${DBNAME:-$DB}"
 
 apidata() {
     local ARGS=
@@ -66,6 +70,7 @@ process_users_to_mysql() {
     while IFS=$'\t' read -r line; do
         user=$(echo "$line" | awk -F'[:-> \t]+' '/^user:/ {print $2}')
         user="${user%-}"
+        user="${user%@vless}"
         dir=$(echo "$line" | awk -F'[:-> \t]+' '/^user:/ {print $3}')
         val=$(echo "$line" | awk '{print $2}')
 
