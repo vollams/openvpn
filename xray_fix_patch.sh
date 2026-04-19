@@ -99,11 +99,11 @@ _XRAY=\$(command -v xray || true)
 if [[ -z "\$_XRAY" ]]; then exit 1; fi
 datenow=\$(date +"%Y-%m-%d %T")
 server_ip=$server_ip
-. /etc/.db-base
+if [[ -f /etc/xray/.db-base ]]; then . /etc/xray/.db-base; elif [[ -f /etc/.db-base ]]; then . /etc/.db-base; fi
 DB_HOST="\${HOST:-localhost}"
 DB_USER="\${USER}"
 DB_PASS="\${PASS}"
-DB_NAME="\${DBNAME}"
+DB_NAME="\${DBNAME:-\$DB}"
 apidata() {
     local ARGS=
     if [[ \$1 == "reset" ]]; then ARGS="reset: true"; fi
@@ -156,7 +156,7 @@ if [[ -f /etc/xray/.db-base ]]; then . /etc/xray/.db-base; elif [[ -f /etc/.db-b
 DB_HOST="\${HOST:-localhost}"
 DB_USER="\${USER}"
 DB_PASS="\${PASS}"
-DB_NAME="\${DBNAME}"
+DB_NAME="\${DBNAME:-\$DB}"
 XRAY_ACCESS_LOG="/var/log/xray/access.log"
 DATA="\$(\$_XRAY api statsquery --server=\$_APISERVER 2>/dev/null)"
 ONLINE_USERS=(\$(
