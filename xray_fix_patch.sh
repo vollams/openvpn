@@ -185,6 +185,54 @@ XCEOF
 chmod +x /etc/xray/xray_checker.sh
 echo "    xray_checker.sh written"
 
+echo "[3b/5] Patching authentication.sh to regenerate xray config with per-user emails..."
+PANEL_URL=$(grep -oP "(?<=PANEL_URL=')[^']*" /etc/.db-base 2>/dev/null || echo "")
+API_KEY=$(grep -oP "(?<=API_KEY=')[^']*" /etc/.db-base 2>/dev/null || echo "")
+DOMAIN=$(grep -m1 "^DOMAIN=" /root/.ports 2>/dev/null | cut -d= -f2 || echo "")
+
+if [[ -z "$PANEL_URL" || -z "$API_KEY" ]]; then
+    echo "    WARNING: Could not read PANEL_URL/API_KEY from /etc/.db-base — skipping auth.sh patch"
+else
+    if [[ -f /home/authentication.sh ]]; then
+        if ! grep -q "xray_vless.php" /home/authentication.sh; then
+            cat >> /home/authentication.sh << AUTHEOF
+
+# Regenerate xray config.json with per-user email fields (required for per-user stats)
+wget -q -O /tmp/xray_new_config.json "${PANEL_URL}/api/authentication/xray_vless.php?key=${API_KEY}&domain=${DOMAIN}" 2>/dev/null
+if python3 -c "import json,sys; json.load(open('/tmp/xray_new_config.json'))" 2>/dev/null; then
+    cp /tmp/xray_new_config.json /usr/local/etc/xray/config.json
+    systemctl reload xray 2>/dev/null || systemctl restart xray 2>/dev/null
+fi
+AUTHEOF
+            echo "    authentication.sh patched with xray config regeneration"
+            # Run it immediately to get fresh config now
+            bash /home/authentication.sh >/dev/null 2>&1 &
+            sleep 5
+            # Verify config now has email fields
+            ECNT=$(python3 -c "import json; c=json.load(open('$CONFIG')); cl=c['inbounds'][1]['settings']['clients'] if len(c['inbounds'])>1 else []; print(sum(1 for x in cl if 'email' in x))" 2>/dev/null || echo "0")
+            echo "    xray config clients with email: $ECNT"
+        else
+            echo "    authentication.sh already has xray_vless.php entry"
+        fi
+    else
+        echo "    WARNING: /home/authentication.sh not found — creating it"
+        cat > /home/authentication.sh << AUTHEOF
+#!/bin/bash
+SHELL=/bin/bash
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+# Regenerate xray config.json with per-user email fields (required for per-user stats)
+wget -q -O /tmp/xray_new_config.json "${PANEL_URL}/api/authentication/xray_vless.php?key=${API_KEY}&domain=${DOMAIN}" 2>/dev/null
+if python3 -c "import json,sys; json.load(open('/tmp/xray_new_config.json'))" 2>/dev/null; then
+    cp /tmp/xray_new_config.json /usr/local/etc/xray/config.json
+    systemctl reload xray 2>/dev/null || systemctl restart xray 2>/dev/null
+fi
+AUTHEOF
+        chmod +x /home/authentication.sh
+        echo -e "* *\t* * *\troot\tbash /home/authentication.sh" >> /etc/cron.d/account
+        echo "    authentication.sh created and cron installed"
+    fi
+fi
+
 echo "[4/5] Installing cron jobs..."
 if ! grep -q "xray_stats.sh" /etc/cron.d/xray_stats 2>/dev/null; then
     echo -e "* *\t* * *\troot\tbash /etc/xray/xray_stats.sh" > /etc/cron.d/xray_stats
