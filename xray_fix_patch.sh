@@ -124,6 +124,7 @@ process_users_to_mysql() {
     while IFS=\$'\t' read -r line; do
         user=\$(echo "\$line" | awk -F'[:-> \t]+' '/^user:/ {print \$2}')
         user="\${user%-}"
+        user="\${user%@vless}"
         dir=\$(echo "\$line" | awk -F'[:-> \t]+' '/^user:/ {print \$3}')
         val=\$(echo "\$line" | awk '{print \$2}')
         [[ -z "\$user" || -z "\$dir" || -z "\$val" ]] && continue
@@ -161,6 +162,7 @@ ONLINE_USERS=(\$(
     echo "\$DATA" \
     | grep '"name": "user' \
     | sed -E 's/.*user>>>([^>]+)>>>.*/\1/' \
+    | sed 's/@vless\$//' \
     | sort -u
 ))
 if [[ \${#ONLINE_USERS[@]} -eq 0 ]]; then
