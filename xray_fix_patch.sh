@@ -186,94 +186,82 @@ chmod +x /etc/xray/xray_checker.sh
 echo "    xray_checker.sh written"
 
 echo "[3b/5] Writing xray config regen script (local DB, no HTTP needed)..."
-. /etc/.db-base
-_DB_HOST="${HOST:-localhost}"
-_DB_USER="${USER}"
-_DB_PASS="${PASS}"
-_DB_NAME="${DBNAME}"
 
-# Get domain from existing xray config TLS cert or fallback to server_ip
-_DOMAIN=$(python3 -c "
-import json
-try:
-    c=json.load(open('$CONFIG'))
-    for ib in c.get('inbounds',[]):
-        tls=ib.get('streamSettings',{}).get('tlsSettings',{})
-        sn=tls.get('serverName','')
-        if sn: print(sn); break
-    else: print('')
-except: print('')
-" 2>/dev/null)
-[ -z "$_DOMAIN" ] && _DOMAIN="$server_ip"
-
-cat >/etc/xray/xray_config_regen.sh <<REGENEOF
-#!/bin/bash
-# Regenerate xray config.json with per-user email fields for stats tracking
-. /etc/.db-base
-DB_HOST="\${HOST:-localhost}"
-DB_USER="\${USER}"
-DB_PASS="\${PASS}"
-DB_NAME="\${DBNAME}"
-DOMAIN="$_DOMAIN"
-XRAY_CONFIG=/usr/local/etc/xray/config.json
-
-# Get active usernames from DB
-USERS=\$(mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" \
-  -sN -e "SELECT user_name FROM users WHERE duration>0 AND is_freeze=0 AND user_level NOT IN ('superadmin','developer','reseller') ORDER BY user_id DESC" 2>/dev/null)
-
-if [[ -z "\$USERS" ]]; then exit 0; fi
-
-python3 - <<PYEOF
-import json, hashlib, subprocess, sys
-
-users_raw = """\$USERS"""
-usernames = [u.strip() for u in users_raw.strip().splitlines() if u.strip()]
+# Write the python helper script first (avoids nested heredoc problem)
+cat >/etc/xray/xray_config_regen.py <<'PYEOF'
+import json, hashlib, sys, os
 
 def username_to_uuid(u):
     h = hashlib.md5(u.encode()).hexdigest()
     return f"{h[0:8]}-{h[8:12]}-4{h[13:16]}-a{h[17:20]}-{h[20:32]}"
 
+users_input = sys.stdin.read().strip()
+usernames = [u.strip() for u in users_input.splitlines() if u.strip()]
+
 clients = [{"id": username_to_uuid(u), "email": u, "level": 0} for u in usernames]
 if not clients:
     clients = [{"id": "f4d36e7e-c9e4-4f83-9f9b-2c3e8f7a6b5d", "email": "default"}]
 
+cfg_path = os.environ.get("XRAY_CONFIG", "/usr/local/etc/xray/config.json")
 try:
-    with open("\$XRAY_CONFIG") as f:
+    with open(cfg_path) as f:
         cfg = json.load(f)
-except:
-    sys.exit(0)
+except Exception as e:
+    print(f"ERROR reading config: {e}", file=sys.stderr)
+    sys.exit(1)
 
-# Update all vless/vmess/trojan inbounds with new client list
 for ib in cfg.get("inbounds", []):
-    proto = ib.get("protocol","")
-    if proto in ("vless","vmess","trojan") and ib.get("tag") != "api":
+    proto = ib.get("protocol", "")
+    if proto in ("vless", "vmess", "trojan") and ib.get("tag") != "api":
         settings = ib.setdefault("settings", {})
         if proto == "trojan":
             settings["clients"] = [{"password": c["id"], "email": c["email"], "level": 0} for c in clients]
         else:
             settings["clients"] = clients
 
-# Ensure stats/policy/api sections
 cfg["stats"] = {}
-cfg.setdefault("api", {"services": ["HandlerService","LoggerService","StatsService"], "tag": "api"})
+cfg.setdefault("api", {"services": ["HandlerService", "LoggerService", "StatsService"], "tag": "api"})
 cfg.setdefault("policy", {})
 cfg["policy"].setdefault("levels", {})
 cfg["policy"]["levels"]["0"] = {"statsUserDownlink": True, "statsUserUplink": True}
-cfg["policy"].setdefault("system", {"statsInboundUplink": True, "statsInboundDownlink": True, "statsOutboundUplink": True, "statsOutboundDownlink": True})
+cfg["policy"]["system"] = {"statsInboundUplink": True, "statsInboundDownlink": True, "statsOutboundUplink": True, "statsOutboundDownlink": True}
 
-with open("\$XRAY_CONFIG", "w") as f:
+# Ensure routing has api rule
+cfg.setdefault("routing", {"rules": []})
+rules = cfg["routing"].get("rules", [])
+has_api_rule = any("api" in r.get("inboundTag", []) for r in rules)
+if not has_api_rule:
+    rules.insert(0, {"type": "field", "inboundTag": ["api"], "outboundTag": "api"})
+    cfg["routing"]["rules"] = rules
+
+with open(cfg_path, "w") as f:
     json.dump(cfg, f, indent=2)
 print(f"xray config updated: {len(clients)} users")
 PYEOF
 
+# Now write the bash regen script that calls the python helper
+cat >/etc/xray/xray_config_regen.sh <<'REGENEOF'
+#!/bin/bash
+. /etc/.db-base
+DB_HOST="${HOST:-localhost}"
+DB_USER="${USER}"
+DB_PASS="${PASS}"
+DB_NAME="${DBNAME}"
+export XRAY_CONFIG=/usr/local/etc/xray/config.json
+[ ! -f "$XRAY_CONFIG" ] && XRAY_CONFIG=/etc/xray/config.json
+[ ! -f "$XRAY_CONFIG" ] && exit 1
+
+mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+  -sN -e "SELECT user_name FROM users WHERE duration>0 AND is_freeze=0 AND user_level NOT IN ('superadmin','developer','reseller') ORDER BY user_id DESC" 2>/dev/null \
+  | python3 /etc/xray/xray_config_regen.py
+
 systemctl reload xray 2>/dev/null || true
 REGENEOF
 chmod +x /etc/xray/xray_config_regen.sh
-echo "    xray_config_regen.sh written"
+echo "    xray_config_regen.sh + xray_config_regen.py written"
 
-# Run it immediately to populate config with per-user emails now
-bash /etc/xray/xray_config_regen.sh
-echo "    config regen ran"
+# Run it immediately
+bash /etc/xray/xray_config_regen.sh && echo "    config regen ran OK" || echo "    WARNING: config regen failed"
 
 # Restart xray with fresh config
 systemctl restart xray 2>/dev/null
@@ -290,20 +278,20 @@ except: print(0)
 " 2>/dev/null || echo "0")
 echo "    xray config clients with email field: $ECNT"
 
-# Hook into authentication.sh (runs every minute)
+# Hook into authentication.sh (runs every minute via cron)
 if [[ -f /home/authentication.sh ]]; then
     if ! grep -q "xray_config_regen" /home/authentication.sh; then
-        echo -e "\n# Regenerate xray per-user config for stats tracking\nbash /etc/xray/xray_config_regen.sh 2>/dev/null" >> /home/authentication.sh
-        echo "    authentication.sh hooked to run xray_config_regen.sh"
+        printf '\n# Regenerate xray per-user config for stats tracking\nbash /etc/xray/xray_config_regen.sh 2>/dev/null\n' >> /home/authentication.sh
+        echo "    authentication.sh hooked"
     else
         echo "    authentication.sh already hooked"
     fi
 fi
 
-# Also add standalone cron for xray config regen
+# Add cron for xray config regen (every minute)
 if ! grep -q "xray_config_regen" /etc/cron.d/xray_stats 2>/dev/null; then
     echo -e "* *\t* * *\troot\tbash /etc/xray/xray_config_regen.sh" >> /etc/cron.d/xray_stats
-    echo "    xray_config_regen cron added to xray_stats"
+    echo "    xray_config_regen added to cron"
 fi
 
 echo "[4/5] Installing cron jobs..."
