@@ -53,7 +53,7 @@ if [[ ${#ONLINE_USERS[@]} -gt 0 ]]; then
 
     ONLINE_COUNT=${#ONLINE_USERS[@]}
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
-"UPDATE server_list SET online='$ONLINE_COUNT', last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
+"UPDATE server_list SET online='$ONLINE_COUNT' WHERE server_ip='$server_ip';" 2>/dev/null
     exit 0
 fi
 
@@ -66,7 +66,7 @@ if [[ ! -f "$XRAY_ACCESS_LOG" ]]; then
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
 "UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN ('','$server_ip');" 2>/dev/null
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
-"UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
+"UPDATE server_list SET online=0 WHERE server_ip='$server_ip';" 2>/dev/null
     exit 0
 fi
 
@@ -86,7 +86,7 @@ if [[ ${#ACTIVE_IPS[@]} -eq 0 ]]; then
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
 "UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address='$server_ip';" 2>/dev/null
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
-"UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
+"UPDATE server_list SET online=0 WHERE server_ip='$server_ip';" 2>/dev/null
     exit 0
 fi
 
@@ -106,4 +106,4 @@ mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB
 ONLINE_COUNT=$(mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
     -sN -e "SELECT COUNT(*) FROM users WHERE is_connected_xray=1 AND active_address IN ($IP_LIST);" 2>/dev/null || echo 0)
 mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
-"UPDATE server_list SET online='$ONLINE_COUNT', last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
+"UPDATE server_list SET online='$ONLINE_COUNT', online=online WHERE server_ip='$server_ip';" 2>/dev/null
