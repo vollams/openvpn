@@ -208,114 +208,35 @@ XCEOF
 chmod +x /etc/xray/xray_checker.sh
 echo "    xray_checker.sh written"
 
-echo "[3b/5] Writing xray config regen script (local DB, no HTTP needed)..."
-
-# Write the python helper script first (avoids nested heredoc problem)
-cat >/etc/xray/xray_config_regen.py <<'PYEOF'
-import json, hashlib, sys, os
-
-def username_to_uuid(u):
-    h = hashlib.md5(u.encode()).hexdigest()
-    return f"{h[0:8]}-{h[8:12]}-4{h[13:16]}-a{h[17:20]}-{h[20:32]}"
-
-users_input = sys.stdin.read().strip()
-usernames = [u.strip() for u in users_input.splitlines() if u.strip()]
-
-clients = [{"id": username_to_uuid(u), "email": u, "level": 0} for u in usernames]
-if not clients:
-    clients = [{"id": "f4d36e7e-c9e4-4f83-9f9b-2c3e8f7a6b5d", "email": "default"}]
-
-cfg_path = os.environ.get("XRAY_CONFIG", "/usr/local/etc/xray/config.json")
-try:
-    with open(cfg_path) as f:
-        cfg = json.load(f)
-except Exception as e:
-    print(f"ERROR reading config: {e}", file=sys.stderr)
-    sys.exit(1)
-
-for ib in cfg.get("inbounds", []):
-    proto = ib.get("protocol", "")
-    if proto in ("vless", "vmess", "trojan") and ib.get("tag") != "api":
-        settings = ib.setdefault("settings", {})
-        if proto == "trojan":
-            settings["clients"] = [{"password": c["id"], "email": c["email"], "level": 0} for c in clients]
-        else:
-            settings["clients"] = clients
-
-cfg["stats"] = {}
-cfg.setdefault("api", {"services": ["HandlerService", "LoggerService", "StatsService"], "tag": "api"})
-cfg.setdefault("policy", {})
-cfg["policy"].setdefault("levels", {})
-cfg["policy"]["levels"]["0"] = {"statsUserDownlink": True, "statsUserUplink": True}
-cfg["policy"]["system"] = {"statsInboundUplink": True, "statsInboundDownlink": True, "statsOutboundUplink": True, "statsOutboundDownlink": True}
-
-# Ensure routing has api rule
-cfg.setdefault("routing", {"rules": []})
-rules = cfg["routing"].get("rules", [])
-has_api_rule = any("api" in r.get("inboundTag", []) for r in rules)
-if not has_api_rule:
-    rules.insert(0, {"type": "field", "inboundTag": ["api"], "outboundTag": "api"})
-    cfg["routing"]["rules"] = rules
-
-with open(cfg_path, "w") as f:
-    json.dump(cfg, f, indent=2)
-print(f"xray config updated: {len(clients)} users")
-PYEOF
-
-# Now write the bash regen script that calls the python helper
-cat >/etc/xray/xray_config_regen.sh <<'REGENEOF'
-#!/bin/bash
-. /etc/.db-base
-DB_HOST="${HOST:-localhost}"
-DB_USER="${USER}"
-DB_PASS="${PASS}"
-DB_NAME="${DBNAME}"
-export XRAY_CONFIG=/usr/local/etc/xray/config.json
-[ ! -f "$XRAY_CONFIG" ] && XRAY_CONFIG=/etc/xray/config.json
-[ ! -f "$XRAY_CONFIG" ] && exit 1
-
-mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
-  -sN -e "SELECT user_name FROM users WHERE duration>0 AND is_freeze=0 AND user_level NOT IN ('superadmin','developer','reseller') ORDER BY user_id DESC" 2>/dev/null \
-  | python3 /etc/xray/xray_config_regen.py
-
-systemctl reload xray 2>/dev/null || true
-REGENEOF
-chmod +x /etc/xray/xray_config_regen.sh
-echo "    xray_config_regen.sh + xray_config_regen.py written"
-
-# Run it immediately
-bash /etc/xray/xray_config_regen.sh && echo "    config regen ran OK" || echo "    WARNING: config regen failed"
-
-# Restart xray with fresh config
-systemctl restart xray 2>/dev/null
-sleep 2
-
-# Verify email fields in config
-ECNT=$(python3 -c "
+echo "[3b/5] Ensuring xray config preserves original UUID + adds email=shared for stats..."
+# IMPORTANT: AIO uses a single shared UUID for all clients.
+# We must NOT replace it with per-user UUIDs — that breaks existing connections.
+# We only ensure email='shared' is set so xray tracks stats under that tag.
+# Online detection uses access log IP matching (Mode 2 in xray_checker.sh).
+python3 -c "
 import json
-try:
-    c=json.load(open('$CONFIG'))
-    cl=next((ib['settings'].get('clients',[]) for ib in c.get('inbounds',[]) if ib.get('protocol') in ('vless','vmess') and ib.get('tag')!='api'), [])
-    print(sum(1 for x in cl if 'email' in x))
-except: print(0)
-" 2>/dev/null || echo "0")
-echo "    xray config clients with email field: $ECNT"
+cfg = json.load(open('$CONFIG'))
+for ib in cfg.get('inbounds', []):
+    proto = ib.get('protocol','')
+    if proto in ('vless','vmess','trojan') and ib.get('tag') != 'api':
+        s = ib.setdefault('settings', {})
+        clients = s.get('clients', [])
+        # Only add email if missing — never change the UUID
+        for c in clients:
+            if 'email' not in c:
+                c['email'] = 'shared'
+            if 'level' not in c:
+                c['level'] = 0
+with open('$CONFIG', 'w') as f:
+    json.dump(cfg, f, indent=2)
+print('    UUID preserved, email=shared set')
+" 2>/dev/null || echo "    (email patch skipped)"
 
-# Hook into authentication.sh (runs every minute via cron)
-if [[ -f /home/authentication.sh ]]; then
-    if ! grep -q "xray_config_regen" /home/authentication.sh; then
-        printf '\n# Regenerate xray per-user config for stats tracking\nbash /etc/xray/xray_config_regen.sh 2>/dev/null\n' >> /home/authentication.sh
-        echo "    authentication.sh hooked"
-    else
-        echo "    authentication.sh already hooked"
-    fi
-fi
-
-# Add cron for xray config regen (every minute)
-if ! grep -q "xray_config_regen" /etc/cron.d/xray_stats 2>/dev/null; then
-    echo -e "* *\t* * *\troot\tbash /etc/xray/xray_config_regen.sh" >> /etc/cron.d/xray_stats
-    echo "    xray_config_regen added to cron"
-fi
+# Remove any stale regen hooks that would break config
+sed -i '/xray_config_regen/d' /home/authentication.sh 2>/dev/null || true
+sed -i '/xray_config_regen/d' /etc/cron.d/xray_stats 2>/dev/null || true
+rm -f /etc/xray/xray_config_regen.sh /etc/xray/xray_config_regen.py 2>/dev/null || true
+echo "    regen hooks removed (access log IP matching used instead)"
 
 echo "[4/5] Installing cron jobs..."
 if ! grep -q "xray_stats.sh" /etc/cron.d/xray_stats 2>/dev/null; then
