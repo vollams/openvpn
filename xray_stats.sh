@@ -103,18 +103,18 @@ EOF
 
 DATA=$(apidata "$1")
 
+# **IMPORTANT: MySQL update runs first, before any optional debug output**
+process_users_to_mysql
+
 echo "------------Inbound----------"
-print_sum "$DATA" "inbound"
+print_sum "$DATA" "inbound" 2>/dev/null
 echo "-----------------------------"
 
 echo "------------Outbound---------"
-print_sum "$DATA" "outbound"
+print_sum "$DATA" "outbound" 2>/dev/null
 echo "-----------------------------"
 
 echo
 echo "-------------User------------"
-print_sum "$DATA" "user"
+print_sum "$DATA" "user" 2>/dev/null
 echo "-----------------------------"
-
-# **IMPORTANT: MySQL update must be called**
-process_users_to_mysql
