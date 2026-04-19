@@ -87,8 +87,8 @@ process_users_to_mysql() {
         mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
 UPDATE users
 SET
-  xray_upload = xray_upload + $up,
-  xray_download = xray_download + $down,
+  bytes_sent = bytes_sent + $up,
+  bytes_received = bytes_received + $down,
   device_connected = 1,
   is_connected_xray = 1,
   is_connected = 1,

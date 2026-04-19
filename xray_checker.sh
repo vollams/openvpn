@@ -53,6 +53,10 @@ WHERE is_connected_xray = 1
   AND active_address = '$server_ip';
 EOF
 
+    mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
+UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';
+EOF
+
     exit 0
 fi
 
@@ -89,4 +93,12 @@ SET
     active_date = ''
 WHERE active_address = '$server_ip'
   AND user_name NOT IN ($ACTIVE_LIST);
+EOF
+
+# ======================================================
+# 7) Update server_list.online count for this server
+# ======================================================
+ONLINE_COUNT=${#ONLINE_USERS[@]}
+mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
+UPDATE server_list SET online='$ONLINE_COUNT', last_update=NOW() WHERE server_ip='$server_ip';
 EOF

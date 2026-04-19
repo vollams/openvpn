@@ -29,7 +29,7 @@
           },
           {
             "dest": 60002,
-            "path": "/firenet/",
+            "path": "/vollam/",
             "xver": 1
           }
         ]
@@ -72,7 +72,7 @@
           "security": "none",
           "wsSettings": {
               "acceptProxyProtocol": true,
-              "path": "/firenet/"
+              "path": "/vollam/"
           }
       }
   }

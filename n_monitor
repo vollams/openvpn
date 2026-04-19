@@ -472,6 +472,8 @@ squid=$(systemctl is-active squid)
 . /root/.ports
 . /etc/xray/.db-base
 
+xray_online=$(mysql --ssl-verify-server-cert=OFF -u $DB_USER -p$DB_PASS -D $DB_NAME -h $DB_HOST -sN -e "SELECT COUNT(*) FROM users WHERE is_connected_xray=1 AND active_address='$ip'" 2>/dev/null || echo 0)
+
 # sanitize + SQL-escape a string for embedding into single-quoted SQL literals
 escape_for_sql() {
   local s="$1"
@@ -509,7 +511,9 @@ UPDATE server_list SET
   xray_ss          = '$(escape_for_sql "$ss")',
   squid_status     = '$(escape_for_sql "$squid")',
   squid            = '$(escape_for_sql "$squid_port")',
-  socket           = '$(escape_for_sql "$socket_port")'
+  socket           = '$(escape_for_sql "$socket_port")',
+  online           = '$(escape_for_sql "$xray_online")',
+  last_update      = NOW()
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
 SQL
@@ -526,6 +530,8 @@ squid=$(systemctl is-active squid)
 . /root/.ports
 . /etc/xray/.db-base
 
+xray_online=$(mysql --ssl-verify-server-cert=OFF -u $DB_USER -p$DB_PASS -D $DB_NAME -h $DB_HOST -sN -e "SELECT COUNT(*) FROM users WHERE is_connected_xray=1 AND active_address='$ip'" 2>/dev/null || echo 0)
+
 # sanitize + SQL-escape a string for embedding into single-quoted SQL literals
 escape_for_sql() {
   local s="$1"
@@ -563,7 +569,9 @@ UPDATE server_list SET
   xray_ss          = '$(escape_for_sql "$ss")',
   squid_status     = '$(escape_for_sql "$squid")',
   squid            = '$(escape_for_sql "$squid_port")',
-  socket           = '$(escape_for_sql "$socket_port")'
+  socket           = '$(escape_for_sql "$socket_port")',
+  online           = '$(escape_for_sql "$xray_online")',
+  last_update      = NOW()
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
 SQL
