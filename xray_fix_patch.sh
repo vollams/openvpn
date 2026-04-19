@@ -186,7 +186,7 @@ if [[ ! -f "\$XRAY_ACCESS_LOG" ]]; then
 "UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='\$server_ip';" 2>/dev/null
     exit 0
 fi
-ACTIVE_IPS=(\$(awk -v cutoff="\$(date -d '120 seconds ago' '+%Y/%m/%d %H:%M:%S' 2>/dev/null)" '\$0 > cutoff { match(\$0, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/, a); if (a[0] != "") print a[0] }' "\$XRAY_ACCESS_LOG" 2>/dev/null | grep -v '^\(127\.\|0\.\)' | sort -u))
+ACTIVE_IPS=(\$(tail -500 "\$XRAY_ACCESS_LOG" 2>/dev/null | grep ' accepted ' | grep -oP 'from \K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | grep -v '^127\.' | sort -u))
 if [[ \${#ACTIVE_IPS[@]} -eq 0 ]]; then
     mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
 "UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address NOT IN ('','\$server_ip');" 2>/dev/null
