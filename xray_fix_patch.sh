@@ -181,15 +181,18 @@ if [[ \${#ONLINE_USERS[@]} -gt 0 ]]; then
 fi
 if [[ ! -f "\$XRAY_ACCESS_LOG" ]]; then
     mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
-"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address='\$server_ip';" 2>/dev/null
+"UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN ('','\$server_ip');" 2>/dev/null
     mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
 "UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='\$server_ip';" 2>/dev/null
     exit 0
 fi
-ACTIVE_IPS=(\$(tail -500 "\$XRAY_ACCESS_LOG" 2>/dev/null | grep ' accepted ' | grep -oP 'from \K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | grep -v '^127\.' | sort -u))
+MINUTE1=\$(date '+%Y/%m/%d %H:%M' 2>/dev/null)
+MINUTE2=\$(date -d '1 minute ago' '+%Y/%m/%d %H:%M' 2>/dev/null)
+MINUTE3=\$(date -d '2 minutes ago' '+%Y/%m/%d %H:%M' 2>/dev/null)
+ACTIVE_IPS=(\$(grep -E "^(\$MINUTE1|\$MINUTE2|\$MINUTE3)" "\$XRAY_ACCESS_LOG" 2>/dev/null | grep ' accepted ' | grep -oP 'from \K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | grep -v '^127\.' | sort -u))
 if [[ \${#ACTIVE_IPS[@]} -eq 0 ]]; then
     mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
-"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address NOT IN ('','\$server_ip');" 2>/dev/null
+"UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN ('','\$server_ip');" 2>/dev/null
     mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
 "UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='\$server_ip';" 2>/dev/null
     exit 0
@@ -199,7 +202,7 @@ IP_LIST="\${IP_LIST%,}"
 mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
 "UPDATE users SET is_connected=1, is_connected_xray=1, active_date='\$datenow' WHERE active_address IN (\$IP_LIST);" 2>/dev/null
 mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
-"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address NOT IN (\$IP_LIST,'','\$server_ip');" 2>/dev/null
+"UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN (\$IP_LIST,'','\$server_ip');" 2>/dev/null
 ONLINE_COUNT=\$(mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -sN -e \
 "SELECT COUNT(*) FROM users WHERE is_connected_xray=1 AND active_address IN (\$IP_LIST);" 2>/dev/null || echo 0)
 mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \

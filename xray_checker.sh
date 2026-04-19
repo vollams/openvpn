@@ -64,15 +64,18 @@ fi
 if [[ ! -f "$XRAY_ACCESS_LOG" ]]; then
     # No API users, no access log — mark all offline
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
-"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address='$server_ip';" 2>/dev/null
+"UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN ('','$server_ip');" 2>/dev/null
     mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
 "UPDATE server_list SET online=0, last_update=NOW() WHERE server_ip='$server_ip';" 2>/dev/null
     exit 0
 fi
 
-# Get IPs from accepted connections in recent access log lines
-# Use tail of last 500 lines — avoids broken awk timestamp comparison
-ACTIVE_IPS=($(tail -500 "$XRAY_ACCESS_LOG" 2>/dev/null \
+# Get IPs with accepted connections in last 120 seconds
+# Generate last 2 minute timestamps and grep log lines matching them
+MINUTE1=$(date '+%Y/%m/%d %H:%M' 2>/dev/null)
+MINUTE2=$(date -d '1 minute ago' '+%Y/%m/%d %H:%M' 2>/dev/null)
+MINUTE3=$(date -d '2 minutes ago' '+%Y/%m/%d %H:%M' 2>/dev/null)
+ACTIVE_IPS=($(grep -E "^($MINUTE1|$MINUTE2|$MINUTE3)" "$XRAY_ACCESS_LOG" 2>/dev/null \
     | grep ' accepted ' \
     | grep -oP 'from \K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
     | grep -v '^127\.' \
@@ -97,7 +100,7 @@ mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB
 
 # Mark users on this server with IPs no longer active as offline
 mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
-"UPDATE users SET is_connected=0, is_connected_xray=0 WHERE is_connected_xray=1 AND active_address NOT IN ($IP_LIST) AND active_address NOT IN ('', '$server_ip');" 2>/dev/null
+"UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN ($IP_LIST) AND active_address NOT IN ('', '$server_ip');" 2>/dev/null
 
 # Count online users for this server (by matching their active_address IPs to xray port connections)
 ONLINE_COUNT=$(mysql --ssl-verify-server-cert=OFF -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
