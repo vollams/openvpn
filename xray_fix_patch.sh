@@ -139,8 +139,29 @@ process_users_to_mysql() {
 "UPDATE users SET bytes_sent=bytes_sent+\$up, bytes_received=bytes_received+\$down, device_connected=1, is_connected_xray=1, is_connected=1, active_address='\$server_ip', active_date='\$datenow' WHERE user_name='\$user';" 2>/dev/null
     done
 }
+distribute_inbound_to_users() {
+    local UP_TOTAL=\$(echo "\$DATA" | awk '/^inbound:.*->up/{sum+=\$2} END{printf "%.0f", sum}')
+    local DOWN_TOTAL=\$(echo "\$DATA" | awk '/^inbound:.*->down/{sum+=\$2} END{printf "%.0f", sum}')
+    [[ "\$UP_TOTAL" -le 0 && "\$DOWN_TOTAL" -le 0 ]] && return
+    local USERS_SQL=\$(mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" \
+        -sN -e "SELECT user_name FROM users WHERE is_connected_xray=1 AND active_address NOT IN ('','\$server_ip');" 2>/dev/null)
+    local USER_COUNT=\$(echo "\$USERS_SQL" | grep -c '.')
+    [[ "\$USER_COUNT" -le 0 ]] && return
+    local PER_UP=\$(( UP_TOTAL / USER_COUNT ))
+    local PER_DOWN=\$(( DOWN_TOTAL / USER_COUNT ))
+    [[ "\$PER_UP" -le 0 && "\$PER_DOWN" -le 0 ]] && return
+    while IFS= read -r user; do
+        [[ -z "\$user" ]] && continue
+        mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
+"UPDATE users SET bytes_sent=bytes_sent+\$PER_UP, bytes_received=bytes_received+\$PER_DOWN WHERE user_name='\$user';" 2>/dev/null
+    done <<< "\$USERS_SQL"
+}
 DATA=\$(apidata "\$1")
 process_users_to_mysql
+HAS_USER_STATS=\$(echo "\$DATA" | grep -c '^user:')
+if [[ "\$HAS_USER_STATS" -eq 0 ]]; then
+    distribute_inbound_to_users
+fi
 XSEOF
 chmod +x /etc/xray/xray_stats.sh
 echo "    xray_stats.sh written"
