@@ -207,10 +207,11 @@ if [[ ! -f "\$XRAY_ACCESS_LOG" ]]; then
 "UPDATE server_list SET online=0 WHERE server_ip='\$server_ip';" 2>/dev/null
     exit 0
 fi
-MINUTE1=\$(date '+%Y/%m/%d %H:%M' 2>/dev/null)
-MINUTE2=\$(date -d '1 minute ago' '+%Y/%m/%d %H:%M' 2>/dev/null)
-MINUTE3=\$(date -d '2 minutes ago' '+%Y/%m/%d %H:%M' 2>/dev/null)
-ACTIVE_IPS=(\$(grep -E "^(\$MINUTE1|\$MINUTE2|\$MINUTE3)" "\$XRAY_ACCESS_LOG" 2>/dev/null | grep ' accepted ' | grep -oP 'from \K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | grep -v '^127\.' | sort -u))
+ACTIVE_IPS=(\$(awk -v cutoff="\$(date -d '10 minutes ago' '+%Y/%m/%d %H:%M')" \
+    '\$0 >= cutoff && / accepted /' "\$XRAY_ACCESS_LOG" 2>/dev/null \
+    | grep -oP 'from \K\S+' \
+    | sed 's/:[0-9]*\$//' | sed 's/^\[//; s/\]\$//' | sed 's/^::ffff://i' \
+    | grep -vE '^(127\.|::1\$|\$)' | sort -u))
 if [[ \${#ACTIVE_IPS[@]} -eq 0 ]]; then
     mysql --ssl-verify-server-cert=OFF -h "\$DB_HOST" -u "\$DB_USER" -p"\$DB_PASS" "\$DB_NAME" -e \
 "UPDATE users SET is_connected=0, is_connected_xray=0, active_address='' WHERE is_connected_xray=1 AND active_address NOT IN ('','\$server_ip');" 2>/dev/null
