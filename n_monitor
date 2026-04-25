@@ -339,7 +339,7 @@ total_sshssl=$(netstat -natp | awk "/$ip:445/ && /ESTABLISHED/ && /stunnel4/" | 
 totalssh=$((total_sshd + total_dropbear + total_socket1 + total_socket2 + total_socket3 + total_sshssl))
 total_hysteria=$(netstat -natp | awk "/$ip:53/ && /ESTABLISHED/ && /hysteria/" | wc -l)
 . /root/.ports
-. /etc/openvpn/login/config.sh
+. /etc/.db-base 2>/dev/null || . /etc/openvpn/login/config.sh
 
 # sanitize + SQL-escape a string for embedding into single-quoted SQL literals
 escape_for_sql() {
@@ -390,9 +390,7 @@ UPDATE server_list SET
   ssh_port         = '$(escape_for_sql "$ssh_port")',
   dropbear_port    = '$(escape_for_sql "$dropbear_port")',
   squid            = '$(escape_for_sql "$squid_port")',
-  socket           = '$(escape_for_sql "$socket_port")',
-  online           = '$(escape_for_sql "$totalovpn")',
-  hysteria_online  = '$(escape_for_sql "$total_hysteria")'
+  socket           = '$(escape_for_sql "$socket_port")'
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
 SQL
