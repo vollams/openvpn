@@ -612,8 +612,9 @@ UPDATE server_list SET
   bandwidth        = '$(escape_for_sql "$bandwidth")',
   os               = '$(escape_for_sql "$os")',
   proto            = '$(escape_for_sql "$service")',
-  psiphon_status   = '$(escape_for_sql "$psiphon")',
   squid_status     = '$(escape_for_sql "$squid")',
+  squid            = '8080',
+  status           = 1,
   secret           = '$(escape_for_sql "$secret")'
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
