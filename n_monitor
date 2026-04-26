@@ -614,8 +614,7 @@ UPDATE server_list SET
   proto            = '$(escape_for_sql "$service")',
   squid_status     = '$(escape_for_sql "$squid")',
   squid            = '8080',
-  status           = 1,
-  secret           = '$(escape_for_sql "$secret")'
+  status           = 1
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
 SQL
