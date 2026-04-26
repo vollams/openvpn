@@ -510,8 +510,7 @@ UPDATE server_list SET
   squid_status     = '$(escape_for_sql "$squid")',
   squid            = '$(escape_for_sql "$squid_port")',
   socket           = '$(escape_for_sql "$socket_port")',
-  online           = '$(escape_for_sql "$xray_online")',
-  last_update      = NOW()
+  online           = '$(escape_for_sql "$xray_online")'
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
 SQL
@@ -568,8 +567,7 @@ UPDATE server_list SET
   squid_status     = '$(escape_for_sql "$squid")',
   squid            = '$(escape_for_sql "$squid_port")',
   socket           = '$(escape_for_sql "$socket_port")',
-  online           = '$(escape_for_sql "$xray_online")',
-  last_update      = NOW()
+  online           = '$(escape_for_sql "$xray_online")'
 WHERE server_ip = '$(escape_for_sql "$ip")'
 ;
 SQL
