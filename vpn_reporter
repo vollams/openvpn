@@ -1,0 +1,127 @@
+#!/bin/bash
+# VPN Usage Reporter — runs every 2 minutes via cron
+# Collects OpenVPN, Xray, SSH bandwidth data and POSTs to panel
+# Config from /etc/.db-base
+
+DB_BASE=/etc/.db-base
+[ ! -f "$DB_BASE" ] && DB_BASE=/root/.db-base
+[ ! -f "$DB_BASE" ] && exit 0
+
+API_LINK=$(grep -oP "(?<=API_LINK=')[^']*" "$DB_BASE" 2>/dev/null | head -1)
+API_KEY=$(grep -oP "(?<=API_KEY=')[^']*" "$DB_BASE" 2>/dev/null | head -1)
+PANEL_URL=$(grep -oP "(?<=PANEL_URL=')[^']*" "$DB_BASE" 2>/dev/null | head -1)
+SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+
+[ -z "$API_LINK" ] || [ -z "$API_KEY" ] && exit 0
+
+REPORT_URL="${PANEL_URL%/}/api/usage/report.php"
+
+declare -a CONN_LIST
+
+# ── 1. OpenVPN (parse openvpn-status.log) ─────────────────────────────────────
+for OVPN_LOG in /var/log/openvpn/openvpn-status.log /tmp/openvpn-status.log /etc/openvpn/openvpn-status.log; do
+    [ ! -f "$OVPN_LOG" ] && continue
+    IN_CLIENT=0
+    while IFS=',' read -r F1 F2 F3 F4 F5 REST; do
+        [ "$F1" = "CLIENT_LIST" ] && { IN_CLIENT=1; continue; }
+        [ "$IN_CLIENT" -eq 0 ] && continue
+        [[ "$F1" =~ ^(ROUTING_TABLE|GLOBAL_STATS|END|Updated)$ ]] && { IN_CLIENT=0; continue; }
+        [ "$F1" = "Common Name" ] && continue
+        [ -z "$F1" ] && continue
+        UNAME=$(echo "$F1" | tr -d '"' | head -c 100)
+        C_IP="${F2%%:*}"
+        BRECV="${F4//[^0-9]/}"
+        BSENT="${F5//[^0-9]/}"
+        PROTO="openvpn_tcp"
+        echo "$OVPN_LOG" | grep -qi "udp" && PROTO="openvpn_udp"
+        CONN_LIST+=("{\"username\":\"$UNAME\",\"protocol\":\"$PROTO\",\"bytes_up\":${BSENT:-0},\"bytes_down\":${BRECV:-0},\"client_ip\":\"${C_IP}\",\"status\":\"connected\"}")
+    done < "$OVPN_LOG"
+done
+
+# ── 2. Xray stats ──────────────────────────────────────────────────────────────
+XRAY_BIN=/usr/local/bin/xray
+if [ -x "$XRAY_BIN" ]; then
+    if ss -tlnp 2>/dev/null | grep -q ':62789'; then
+        XRAY_STATS=$($XRAY_BIN api statsquery --server=127.0.0.1:62789 --pattern "" 2>/dev/null)
+        if [ -n "$XRAY_STATS" ]; then
+            while IFS= read -r STAT_LINE; do
+                SNAME=$(echo "$STAT_LINE" | grep -oP '(?<=name:")[^"]+')
+                SVAL=$(echo "$STAT_LINE" | grep -oP '(?<=value:)\d+')
+                [ -z "$SNAME" ] || [ -z "$SVAL" ] || [ "$SVAL" = "0" ] && continue
+                UNAME=$(echo "$SNAME" | grep -oP '(?<=>>>user>>>)[^>]+')
+                DIR=$(echo "$SNAME" | grep -oP '(?<=traffic>>>)\w+')
+                IB=$(echo "$SNAME" | grep -oP 'inbound>>>\K[^>]+')
+                [ -z "$UNAME" ] && continue
+                case "$IB" in
+                    vmess-in*|vmess-grpc*)   XP="xray_vmess"  ;;
+                    vless-in*|vless-grpc*)   XP="xray_vless"  ;;
+                    trojan-in*|trojan-grpc*) XP="xray_trojan" ;;
+                    ss-in*|ss-grpc*)         XP="xray_ss"     ;;
+                    *)                       XP="xray_vmess"  ;;
+                esac
+                [ "$DIR" = "uplink" ] && \
+                    CONN_LIST+=("{\"username\":\"$UNAME\",\"protocol\":\"$XP\",\"bytes_up\":$SVAL,\"bytes_down\":0,\"client_ip\":\"\",\"status\":\"connected\"}") || \
+                    CONN_LIST+=("{\"username\":\"$UNAME\",\"protocol\":\"$XP\",\"bytes_up\":0,\"bytes_down\":$SVAL,\"client_ip\":\"\",\"status\":\"connected\"}")
+            done <<< "$XRAY_STATS"
+        fi
+    fi
+fi
+
+# ── 3. SSH connected users ─────────────────────────────────────────────────────
+while IFS= read -r WHO_LINE; do
+    UNAME=$(echo "$WHO_LINE" | awk '{print $1}' | head -c 100)
+    [[ "$UNAME" =~ ^(root|nobody|daemon|www-data|sshd)$ ]] && continue
+    [ -z "$UNAME" ] && continue
+    CONN_LIST+=("{\"username\":\"$UNAME\",\"protocol\":\"ssh_ws\",\"bytes_up\":0,\"bytes_down\":0,\"client_ip\":\"\",\"status\":\"connected\"}")
+done < <(who 2>/dev/null | grep -v "^root ")
+
+# ── Build JSON payload ─────────────────────────────────────────────────────────
+if [ ${#CONN_LIST[@]} -eq 0 ]; then
+    JSON_CONN="[]"
+else
+    IFS=','; JSON_CONN="[$(IFS=','; echo "${CONN_LIST[*]}")]"; unset IFS
+fi
+PAYLOAD="{\"server_ip\":\"$SERVER_IP\",\"timestamp\":$(date +%s),\"connections\":$JSON_CONN}"
+
+# ── POST to panel ──────────────────────────────────────────────────────────────
+RESP=$(curl -s --max-time 20 \
+    -X POST "$REPORT_URL" \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD" 2>/dev/null)
+
+# ── Apply speed limits from panel response ────────────────────────────────────
+if echo "$RESP" | grep -q '"commands":\[{'; then
+    CMDS=$(echo "$RESP" | grep -oP '\{"username":"[^"]+","limit_kbps":\d+\}')
+    IFACE=$(ip route 2>/dev/null | grep "10\.8\." | awk '{print $3}' | head -1)
+    [ -z "$IFACE" ] && IFACE="tun0"
+    # Ensure root HTB qdisc exists
+    tc qdisc show dev "$IFACE" 2>/dev/null | grep -q "htb 1:" || \
+        tc qdisc add dev "$IFACE" root handle 1: htb default 999 2>/dev/null
+    echo "$CMDS" | while IFS= read -r C; do
+        UN=$(echo "$C" | grep -oP '(?<="username":")[^"]+')
+        LK=$(echo "$C" | grep -oP '(?<="limit_kbps":)\d+')
+        [ -z "$UN" ] && continue
+        # Find VPN IP of user
+        VIP=""
+        for SL in /var/log/openvpn/openvpn-status.log /etc/openvpn/openvpn-status.log; do
+            [ -f "$SL" ] || continue
+            VIP=$(awk -F',' -v u="$UN" '$1=="ROUTING_TABLE" && $2==u {print $3}' "$SL" 2>/dev/null | head -1)
+            [ -n "$VIP" ] && break
+        done
+        [ -z "$VIP" ] && continue
+        CKEY=$(printf '%d' "$(echo "$VIP" | awk -F'.' '{print $4}')" 2>/dev/null || echo "100")
+        if [ "${LK:-0}" -gt 0 ]; then
+            RATE="${LK}kbit"
+            tc class add dev "$IFACE" parent 1: classid "1:${CKEY}" htb rate "$RATE" ceil "$RATE" 2>/dev/null || \
+            tc class change dev "$IFACE" parent 1: classid "1:${CKEY}" htb rate "$RATE" ceil "$RATE" 2>/dev/null
+            tc filter add dev "$IFACE" parent 1: protocol ip prio 1 u32 \
+                match ip dst "${VIP}/32" flowid "1:${CKEY}" 2>/dev/null
+        else
+            tc filter del dev "$IFACE" parent 1: protocol ip prio 1 u32 \
+                match ip dst "${VIP}/32" 2>/dev/null
+        fi
+    done
+fi
+
+exit 0
