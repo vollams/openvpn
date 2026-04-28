@@ -109,7 +109,7 @@ if [ -n "$COMMANDS" ] && [ "$COMMANDS" != "[]" ]; then
         LIMIT=$(echo "$cmd" | grep -oP '(?<="limit_kbps":)\d+')
         [ -z "$UNAME" ] && continue
 
-        # Find this user's VPN IP from OpenVPN routing table
+        # ── OpenVPN: apply tc rate limit on VPN tun interface ─────────────────
         VPN_USER_IP=""
         for STATUS_LOG in /var/log/openvpn/openvpn-status.log /tmp/openvpn-status.log; do
             [ ! -f "$STATUS_LOG" ] && continue
@@ -120,21 +120,29 @@ if [ -n "$COMMANDS" ] && [ "$COMMANDS" != "[]" ]; then
         if [ -n "$VPN_USER_IP" ]; then
             IFACE=$(ip route | grep "10.8.0.0" | awk '{print $3}' | head -1 || echo "tun0")
             if [ "${LIMIT:-0}" -gt 0 ]; then
-                # Apply tc rate limit (HTB)
                 RATE="${LIMIT}kbit"
-                # Add root qdisc if not present
                 tc qdisc show dev "$IFACE" 2>/dev/null | grep -q "htb" || \
                     tc qdisc add dev "$IFACE" root handle 1: htb default 999 2>/dev/null
-                # Hash filter for this IP → class
                 CLASSID=$(printf '%x' $(echo "$VPN_USER_IP" | awk -F'.' '{print $4}'))
                 tc class add dev "$IFACE" parent 1: classid "1:$CLASSID" htb rate "$RATE" ceil "$RATE" 2>/dev/null || \
                     tc class change dev "$IFACE" parent 1: classid "1:$CLASSID" htb rate "$RATE" ceil "$RATE" 2>/dev/null
                 tc filter add dev "$IFACE" parent 1: protocol ip prio 1 u32 \
                     match ip dst "$VPN_USER_IP/32" flowid "1:$CLASSID" 2>/dev/null
             else
-                # Remove limit
                 tc filter del dev "$IFACE" parent 1: protocol ip 2>/dev/null
             fi
+        fi
+
+        # ── Xray: remove user from all inbounds when limit=1 (bandwidth cap hit) ─
+        if [ "${LIMIT:-0}" -eq 1 ] && [ -x "$XRAY_BIN" ] && ss -tlnp 2>/dev/null | grep -q ':62789'; then
+            for INBOUND in vmess-in vless-in trojan-in ss-in vmess-grpc-in vless-grpc-in trojan-grpc-in ss-grpc-in; do
+                $XRAY_BIN api rmu --server=127.0.0.1:62789 \
+                    "{\"tag\":\"$INBOUND\",\"account\":{\"@type\":\"type.googleapis.com/xray.proxy.vmess.Account\",\"id\":\"\"}}" \
+                    2>/dev/null || true
+                # Try simpler email-based removal (supported in newer xray builds)
+                $XRAY_BIN api rmuser --server=127.0.0.1:62789 \
+                    --inbound "$INBOUND" --email "$UNAME" 2>/dev/null || true
+            done
         fi
     done
 fi
